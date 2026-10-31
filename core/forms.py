@@ -232,15 +232,21 @@ def _fill_flow(tpl_row, flow: list[dict], info: dict):
         set_cell(cs[4], seg.get("assessment", ""), size=22)
         # 節次欄
         tcpr = cs[0].find(_w("tcPr"))
+        for va in tcpr.findall(_w("vAlign")):  # 節次靠上，跨頁時才不會跑到頁尾
+            va.set(_w("val"), "top")
         vm = OxmlElement("w:vMerge")
         if i == 0:
             vm.set(_w("val"), "restart")
             set_cell(cs[0], f"第{info['this_period']}節", align="center")
         else:
             set_cell(cs[0], "")
-        tcpr.append(vm)
-        if len(flow) == 1:
-            tcpr.remove(vm)
+        if len(flow) > 1:
+            # Word 規定 vMerge 要排在 tcBorders 等屬性之前
+            after = [x for x in (tcpr.find(_w("tcW")), tcpr.find(_w("gridSpan"))) if x is not None]
+            if after:
+                after[-1].addnext(vm)
+            else:
+                tcpr.insert(0, vm)
         new_rows.append(tr)
     for tr in new_rows:
         tpl_row.addprevious(tr)
@@ -258,6 +264,10 @@ def fill_form2(doc, tbl, info: dict, c: dict, photos: list[bytes]):
     if nt is None:
         return
     pr = rows(nt)
+    for ri in (0, 2):  # 照片列高度配合照片大小，四張照片才放得進同一頁
+        h = pr[ri].find(_w("trPr") + "/" + _w("trHeight"))
+        if h is not None:
+            h.set(_w("val"), "2200")
     caps = c.get("captions", [])
     slots = [(0, 0), (0, 1), (2, 0), (2, 1)]
     for k, (ri, ci) in enumerate(slots):
@@ -269,7 +279,7 @@ def fill_form2(doc, tbl, info: dict, c: dict, photos: list[bytes]):
             set_cell(tc, "", align="center")
             cell = _Cell(tc, doc.tables[1])
             run = cell.paragraphs[0].add_run()
-            w, h = media.fit_size(photos[k], 8.0, 6.0)
+            w, h = media.fit_size(photos[k], 5.6, 3.7)
             run.add_picture(io.BytesIO(photos[k]), width=Cm(w), height=Cm(h))
 
 
