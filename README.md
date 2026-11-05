@@ -13,7 +13,7 @@
 | 檔案 | 用途 |
 |---|---|
 | `app.py` | Streamlit 介面：① 填寫資料 → ② AI 撰寫 → ③ 確認內容 → ④ 下載表件 |
-| `core/ai.py` | Claude 讀教學檔案與照片，撰寫三項表件內容 |
+| `core/ai.py` | Google Gemini（免費版）讀教學檔案與照片，撰寫三項表件內容 |
 | `core/forms.py` | 把內容填進 Word 範本（保留學校格式） |
 | `core/drive.py` | 呼叫 Apps Script，存到雲端硬碟並轉成 Google 文件與 PDF |
 | `apps_script/Code.gs` | Apps Script 程式（真實 SECRET 版在不上傳的 `Code.txt`） |
@@ -26,7 +26,7 @@
    Secrets 填入：
 
    ```toml
-   ANTHROPIC_API_KEY_B64 = "（與優高檢核表相同）"
+   GEMINI_API_KEY = "（與國際教育課程產生器相同的 Gemini 免費金鑰）"
    GAS_WEBHOOK_URL = "（第 1 步複製的網址）"
    GAS_SECRET = "（Code.txt 裡的 SECRET）"
    ```

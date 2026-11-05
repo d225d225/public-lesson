@@ -1,13 +1,16 @@
-"""Claude API：讀取教學檔案與上課照片，撰寫公開授課三項表件內容。"""
+"""Google Gemini（免費版）：讀取教學檔案與上課照片，撰寫公開授課三項表件內容。"""
 from __future__ import annotations
 
 import json
+import time
 
-import anthropic
+from google import genai
+from google.genai import errors, types
 
 from core.forms import OBS_A, OBS_B, OBS_GROUPS, RATINGS, is_item
 
-MODEL = "claude-sonnet-5-5"
+# 免費額度用完、忙線或模型停用時依序改用下一個；可用 secrets 的 GEMINI_MODEL 指定第一順位
+MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"]
 
 OBS_LABELS = {
     "A-3": "精熟任教學科領域知識", "A-3-1": "正確掌握任教單元的教材內容", "A-3-2": "有效連結學生的新舊知識或技能",
@@ -104,44 +107,64 @@ class AIError(RuntimeError):
     pass
 
 
-def _call_json(api_key: str, system: str, content: list, schema: dict) -> dict:
-    client = anthropic.Anthropic(api_key=api_key, timeout=600, max_retries=3)
-    try:
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=32000,
-            system=system,
-            messages=[{"role": "user", "content": content}],
-            extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
-            extra_body={
-                "fallbacks": "default",
-                "output_config": {"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
-            },
-        ) as stream:
-            msg = stream.get_final_message()
-    except anthropic.AuthenticationError as e:
-        raise AIError("AI 金鑰無效，請管理者檢查 secrets 設定") from e
-    except anthropic.RateLimitError as e:
-        raise AIError("AI 使用量暫時達到上限，請稍後再試") from e
-    except anthropic.BadRequestError as e:
-        raise AIError(f"AI 請求格式錯誤：{e.message}") from e
-    except anthropic.APIStatusError as e:
-        raise AIError(f"AI 服務錯誤（{e.status_code}），請稍後再試") from e
-    except anthropic.APIConnectionError as e:
-        raise AIError("連不上 AI 服務，請檢查網路") from e
-
-    if msg.stop_reason == "refusal":
-        raise AIError("AI 無法處理這些檔案，請移除可能敏感的檔案後再試")
-    if msg.stop_reason == "max_tokens":
-        raise AIError("AI 回覆太長被截斷，請減少上傳的檔案後再試")
-    text = next((b.text for b in msg.content if b.type == "text"), "")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise AIError("AI 回傳格式異常，請再試一次") from e
+def _parts(blocks: list[dict]) -> list:
+    out = []
+    for b in blocks:
+        if "text" in b:
+            out.append(types.Part.from_text(text=b["text"]))
+        else:
+            out.append(types.Part.from_bytes(data=b["data"], mime_type=b["mime"]))
+    return out
 
 
-def draft_forms(api_key: str, info: dict, file_blocks: list[dict], photo_blocks: list[dict]) -> dict:
+def _call_json(api_key: str, models: list[str], system: str, blocks: list[dict], schema: dict) -> dict:
+    client = genai.Client(api_key=api_key)
+    config = types.GenerateContentConfig(
+        system_instruction=system, max_output_tokens=65536,
+        response_mime_type="application/json", response_json_schema=schema,
+    )
+    parts = _parts(blocks)
+    models = list(dict.fromkeys(models))
+    last = None
+    # 免費版常忙線（503）或達每分鐘上限（429）：輪流試每個模型，整輪失敗就等一下再來，最多約 3 分鐘
+    for rnd in range(5):
+        for model in list(models):
+            try:
+                resp = client.models.generate_content(model=model, contents=parts, config=config)
+            except errors.ClientError as e:
+                last = e
+                if e.code == 404:  # 模型已停用
+                    models.remove(model)
+                    continue
+                if e.code == 429:
+                    continue
+                if e.code in (401, 403) or "API key" in str(e):
+                    raise AIError("AI 金鑰無效，請管理者檢查 secrets 的 GEMINI_API_KEY") from e
+                raise AIError(f"AI 請求錯誤：{e.message}") from e
+            except errors.ServerError as e:
+                last = e
+                continue
+            if not resp.candidates:
+                raise AIError("AI 無法處理這些檔案，請移除可能敏感的檔案後再試")
+            if str(resp.candidates[0].finish_reason).endswith("MAX_TOKENS"):
+                raise AIError("AI 回覆太長被截斷，請減少上傳的檔案後再試")
+            text = resp.text or ""
+            try:
+                return json.loads(text[text.find("{"):text.rfind("}") + 1])
+            except json.JSONDecodeError:
+                last = AIError("AI 回覆格式錯誤")
+                continue
+        if not models:
+            break
+        if rnd < 4:
+            time.sleep(15 + 15 * rnd)
+    if isinstance(last, errors.ClientError) and last.code == 429:
+        raise AIError("今天的 AI 免費額度用完了（或使用的人太多），請過幾分鐘或明天再試")
+    raise AIError(f"AI 服務暫時無法使用，請稍後再試（{last}）")
+
+
+def draft_forms(api_key: str, info: dict, file_blocks: list[dict], photo_blocks: list[dict],
+                models: list[str] = MODELS) -> dict:
     level = "高中部（普通型高中）" if info["level"] == "高" else "國中部"
     obs_list = "\n".join(f"{c} {OBS_LABELS[c]}" for c in OBS_A + OBS_B)
     links = "\n".join(info.get("links", [])) or "（無）"
@@ -154,7 +177,7 @@ def draft_forms(api_key: str, info: dict, file_blocks: list[dict], photo_blocks:
         f"以下是教師上傳的教學檔案，接著是 {len(photo_blocks) // 2} 張上課照片（captions 依照片順序）。"
         "請據此撰寫三項表件的內容。"
     )
-    content = [{"type": "text", "text": intro}] + file_blocks + photo_blocks
+    content = [{"text": intro}] + file_blocks + photo_blocks
     if not file_blocks:
-        content.append({"type": "text", "text": "（教師沒有上傳教學檔案，請依教學單元名稱與照片合理規劃。）"})
-    return _call_json(api_key, STYLE_GUIDE, content, SCHEMA)
+        content.append({"text": "（教師沒有上傳教學檔案，請依教學單元名稱與照片合理規劃。）"})
+    return _call_json(api_key, models, STYLE_GUIDE, content, SCHEMA)

@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import os
 
@@ -36,21 +35,8 @@ def secret(key: str) -> str:
     return str(v or os.environ.get(key, "")).strip().strip("　")
 
 
-def anthropic_key() -> str:
-    """Streamlit Cloud 的 Secrets 編輯框會把 sk-ant- 金鑰存成圓點，所以也接受 base64 版本。"""
-    key = secret("ANTHROPIC_API_KEY")
-    if key and "•" not in key:
-        return key
-    b64 = secret("ANTHROPIC_API_KEY_B64")
-    if b64:
-        try:
-            return base64.b64decode(b64).decode("ascii").strip()
-        except Exception:
-            pass
-    return key
-
-
-API_KEY = anthropic_key()
+API_KEY = secret("GEMINI_API_KEY")  # Google AI Studio 免費金鑰
+MODELS = [m for m in [secret("GEMINI_MODEL")] if m] + ai.MODELS
 GAS_URL = secret("GAS_WEBHOOK_URL")
 drive = Drive(GAS_URL, secret("GAS_SECRET")) if GAS_URL else None
 
@@ -156,7 +142,7 @@ def step_input():
 
 
 def run_ai(info: dict, ups: list, pics: list):
-    with st.status("AI 正在閱讀教學檔案並撰寫表件（約 1～2 分鐘）…", expanded=True) as status:
+    with st.status("AI 正在閱讀教學檔案並撰寫表件（約 1～3 分鐘，免費版忙線時會自動重試）…", expanded=True) as status:
         file_blocks, warns = media.content_blocks(ups, "教學檔案")
         photo_blocks, w2 = media.content_blocks(pics, "上課照片")
         for w in warns + w2:
@@ -168,7 +154,7 @@ def run_ai(info: dict, ups: list, pics: list):
             except Exception as e:
                 st.warning(f"{p.name} 無法讀取：{e}")
         try:
-            content = ai.draft_forms(API_KEY, info, file_blocks, photo_blocks)
+            content = ai.draft_forms(API_KEY, info, file_blocks, photo_blocks, MODELS)
         except ai.AIError as e:
             status.update(label="AI 撰寫失敗", state="error")
             st.error(str(e))

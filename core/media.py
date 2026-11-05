@@ -1,7 +1,6 @@
 """上傳檔案處理：圖片壓縮、HEIC 轉檔、讀取教學檔案文字、轉成 Claude 可讀的內容區塊。"""
 from __future__ import annotations
 
-import base64
 import io
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +15,6 @@ except ImportError:  # 沒裝 pillow-heif 時，HEIC 會被當成「無法讀取
     pass
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".gif", ".bmp"}
-MAX_PDF_BYTES = 25 * 1024 * 1024
 MAX_TEXT = 30000
 
 
@@ -98,32 +96,29 @@ def pptx_text(data: bytes) -> str:
     return "\n".join(out)
 
 
-def _b64(b: bytes) -> str:
-    return base64.standard_b64encode(b).decode("ascii")
+MAX_PDF_BYTES_AI = 15 * 1024 * 1024  # Gemini 單次請求上限約 20MB
 
 
 def content_blocks(uploads: list[Upload], label: str) -> tuple[list[dict], list[str]]:
-    """把上傳檔案轉成 Claude 內容區塊。回傳 (blocks, warnings)。"""
+    """把上傳檔案轉成 AI 可讀的區塊：{"text": ...} 或 {"data": bytes, "mime": ...}。回傳 (blocks, warnings)。"""
     blocks: list[dict] = []
     warnings: list[str] = []
     for i, up in enumerate(uploads, 1):
-        head = {"type": "text", "text": f"{label} #{i}：{up.name}"}
+        head = {"text": f"{label} #{i}：{up.name}"}
         try:
             if up.kind == "image":
-                blocks += [head, {"type": "image", "source": {
-                    "type": "base64", "media_type": "image/jpeg", "data": _b64(to_jpeg(up.data, 1280, 80))}}]
+                blocks += [head, {"data": to_jpeg(up.data, 1280, 80), "mime": "image/jpeg"}]
             elif up.kind == "pdf":
-                if len(up.data) > MAX_PDF_BYTES:
-                    warnings.append(f"{up.name} 超過 25MB，AI 不讀取此檔")
+                if len(up.data) > MAX_PDF_BYTES_AI:
+                    warnings.append(f"{up.name} 超過 15MB，AI 不讀取此檔（可改傳 PPTX 或壓縮後的 PDF）")
                     continue
-                blocks += [head, {"type": "document", "source": {
-                    "type": "base64", "media_type": "application/pdf", "data": _b64(up.data)}}]
+                blocks += [head, {"data": up.data, "mime": "application/pdf"}]
             elif up.kind == "docx":
-                blocks += [head, {"type": "text", "text": docx_text(up.data)[:MAX_TEXT]}]
+                blocks += [head, {"text": docx_text(up.data)[:MAX_TEXT]}]
             elif up.kind == "pptx":
-                blocks += [head, {"type": "text", "text": pptx_text(up.data)[:MAX_TEXT]}]
+                blocks += [head, {"text": pptx_text(up.data)[:MAX_TEXT]}]
             elif up.kind == "text":
-                blocks += [head, {"type": "text", "text": up.data.decode("utf-8", "replace")[:MAX_TEXT]}]
+                blocks += [head, {"text": up.data.decode("utf-8", "replace")[:MAX_TEXT]}]
             else:
                 warnings.append(f"{up.name} 格式不支援（請改存成 PDF、PPTX 或 DOCX），AI 不讀取此檔")
         except Exception as e:  # 單一檔案壞掉不影響其他檔案
