@@ -10,7 +10,9 @@ from google.genai import errors, types
 from core.forms import OBS_A, OBS_B, OBS_GROUPS, RATINGS, is_item
 
 # 免費額度用完、忙線或模型停用時依序改用下一個；可用 secrets 的 GEMINI_MODEL 指定第一順位
-MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"]
+# 每個模型的免費額度與忙線狀況各自獨立，多列幾個輪流試
+MODELS = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.6-flash", "gemini-3-flash-preview",
+          "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
 
 OBS_LABELS = {
     "A-3": "精熟任教學科領域知識", "A-3-1": "正確掌握任教單元的教材內容", "A-3-2": "有效連結學生的新舊知識或技能",
